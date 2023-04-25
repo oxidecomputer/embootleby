@@ -3,16 +3,14 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::{bail, Context, Result, anyhow};
-use byteorder::ByteOrder;
 use clap::Parser;
 use lpc55_areas::{CMPAPage, CFPAPage};
 use lpc55_isp::cmd::*;
-use lpc55_isp::isp::{do_ping, BootloaderProperty, KeyType};
+use lpc55_isp::isp::do_ping;
 use serialport::{DataBits, FlowControl, Parity, StopBits};
 use zip::ZipArchive;
-use std::io::{Read, Write, ErrorKind};
+use std::io::{Read, ErrorKind};
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 /// A tool for upgrading an Oxide board to verified boot using bogus keys.
