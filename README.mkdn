@@ -1,0 +1,108 @@
+# How to upgrade to bootleby
+
+Intended audience:
+
+- You have a Gimlet, Sidecar, or PSC
+- It is compatible (see below)
+- It was set up before May 2023.
+
+Note that there have also been new Ignition bits released recently; this guide
+will not cover updating Ignition. (You don't need to have updated Ignition for
+this to work.)
+
+## Why you need to do this
+
+We intend to ship hardware to customers with verified boot enabled. This ensures
+that the code in the Root of Trust (RoT) has not been
+modified/exploited/whatever.
+
+Until now, we've been running all our machines without verified boot enabled, so
+the required parts of the RoT have not been programmed. It's not practical to
+reprogram those bits from within the RoT -- we really need to do it through a
+cable. So, we weren't able to transition to verified boot with a mere software
+update.
+
+Sorry about that.
+
+## You will need
+
+- The patient!
+    - Gimlet C or later
+    - PSC B or later
+    - Sidecar B or later
+- A 3.3V serial cable ("UART cable").
+- An MCULink, LPCLink, or other CMSIS-DAP compatible SWD programming dongle.
+  (The STLink, annoyingly, won't work.)
+- A clone of the [`embootleby`] repo (this repo!)
+- A clone of the [Hubris] repo
+- A reasonably recent Humility install (0.10.2 or later)
+- The appropriate bootleby upgrade bundle for your board. We've checked copies
+  into the `embootleby` repo in the `bundles` directory.
+
+## Procedure
+
+### One: connect the things
+
+With power off, connect:
+
+- the SWD dongle to the RoT's programming header
+- the UART cable to the RoT's UART header.
+- the USB end of each to your computer.
+
+You will need both cables attached for basically the whole process.
+
+Identify the name used by your operating system for your UART cable. Likely
+culprits on various operating systems include (numbers will vary):
+
+- `/dev/ttyUSB0`/ `/dev/ttyACM0` (Linux)
+- `/dev/term/3` (Illumos and friends)
+- `/dev/tty.usbmodemSomethingSomething` (Mac)
+- `COM1` (Windows)
+
+etc.
+
+**In all further steps below, we will refer to this name as `$PORT`.**
+
+### Two: verify connectivity
+
+Apply power to the patient.
+
+On your computer, run
+
+```
+humility debugmailbox isp
+```
+
+You should see a message about finding a "plausible" debug mailbox and
+transitioning to ISP mode.
+
+**If this does not work:** check power and your SWD dongle; the UART dongle is
+not involved just yet.
+
+Now, from the `embootleby` repo clone, run:
+
+```
+cargo run $PORT ping
+```
+
+It should say, among other things, `ping success`.
+
+**If this does not work:** check that your UART cable is connected correctly. In
+particular, verify that you've got TX and RX from the perspective of each side
+correct.
+
+### Three: 
+
+Using the appropriate bundle file from the `bundles/` directory of the
+`embootleby` repo, run:
+
+```
+cargo run $PORT install YOUR_CHOSEN_BUNDLE.zip
+```
+
+On success the output will end in a large `SUCCESS` banner. On failure,
+diagnostic text will be printed. Please send that diagnostic text to Cliff.
+
+
+[`embootleby`]: https://github.com/oxidecomputer/embootleby/
+[Hubris]: https://github.com/oxidecomputer/hubris/
