@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.70"
 byteorder = "1.4.3"
-clap = "4.2.4"
+clap = { version = "4.2.4", features = ["wrap_help"] }
 hex = "0.4.3"
 lpc55_areas = { git = "https://github.com/oxidecomputer/lpc55_support/", version = "0.2.2" }
 lpc55_isp = { git = "https://github.com/oxidecomputer/lpc55_support/", version = "0.2.2" }

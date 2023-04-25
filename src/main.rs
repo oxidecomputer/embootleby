@@ -15,18 +15,26 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
+/// A tool for upgrading an Oxide board to verified boot using bogus keys.
 #[derive(Debug, Parser)]
 struct Embootleby {
+    /// Name of serial port where the LPC55 is connected.
     port: String,
+    /// Speed of serial connection -- don't mess with this unless you're really
+    /// bored.
     #[clap(short, long, default_value = "57600", global = true)]
     baud_rate: u32,
+    /// Action to take.
     #[clap(subcommand)]
     cmd: Cmd,
 }
 
 #[derive(Debug, Parser)]
 enum Cmd {
+    /// Do a basic UART connectivity check. This will verify that the board is
+    /// in ISP mode and is talking to your computer.
     Ping,
+    /// Install the configuration from a bundle file.
     Install {
         bundle: PathBuf,
     },
