@@ -190,7 +190,9 @@ fn main() -> Result<()> {
             println!("***********************************");
             println!();
             println!("You now need to load a bootleby-compatible Hubris image.");
+            println!("You need to switch back out of ISP mode first.");
             println!("e.g.");
+            println!("humility debugmailbox debug");
             println!("humility -a the-image-i-want.zip flash");
         }
     }
