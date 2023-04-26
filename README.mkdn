@@ -89,7 +89,10 @@ It should say, among other things, `ping success`.
 
 **If this does not work:** check that your UART cable is connected correctly. In
 particular, verify that you've got TX and RX from the perspective of each side
-correct.
+correct. For reference, an FTDI TTL-232R-3V3 serial cable correctly cabled into a
+Rev C Gimlet looks like this:
+
+![PXL_20230426_182003407 PORTRAIT (1)](https://user-images.githubusercontent.com/328614/234683674-bd3b17ff-65ac-407c-ab56-901f88f587e1.jpg)
 
 ### Three: 
 
