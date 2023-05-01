@@ -12,7 +12,7 @@ clap = { version = "4.2.4", features = ["wrap_help"] }
 hex = "0.4.3"
 lpc55_areas = { git = "https://github.com/oxidecomputer/lpc55_support/", version = "0.2.2" }
 lpc55_isp = { git = "https://github.com/oxidecomputer/lpc55_support/", version = "0.2.2" }
-lpc55_sign = { git = "https://github.com/oxidecomputer/lpc55_support/", version = "0.2.2" }
+lpc55_sign = { git = "https://github.com/oxidecomputer/lpc55_support/", version = "0.3.0" }
 packed_struct = "0.10.1"
 parse_int = "0.6.0"
 serialport = { git = "https://github.com/jgallagher/serialport-rs", branch = "illumos-support", version = "4.2.1-alpha.0", default-features = false }
