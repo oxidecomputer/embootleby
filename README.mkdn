@@ -2,7 +2,7 @@
 
 Intended audience:
 
-- You have a Gimlet, Sidecar, or PSC
+- You have a Gimlet, Sidecar, PSC, or LPCXpresso55S69 eval board
 - It is compatible (see below)
 - It was set up before May 2023.
 
@@ -30,7 +30,9 @@ Sorry about that.
     - Gimlet C or later
     - PSC B or later
     - Sidecar B or later
-- A 3.3V serial cable ("UART cable").
+    - LPCXpresso55S69 eval board
+
+- For all but the LPCXpresso55S69, a 3.3V serial cable ("UART cable").
 - An MCULink, LPCLink, or other CMSIS-DAP compatible SWD programming dongle.
   (The STLink, annoyingly, won't work.)
 - A clone of the [`embootleby`] repo (this repo!)
@@ -43,7 +45,7 @@ Sorry about that.
 
 ### One: connect the things
 
-With power off, connect:
+For Gimlet/PSC/Sidecar, with power off, connect:
 
 - the SWD dongle to the RoT's programming header
 - the UART cable to the RoT's UART header.
@@ -61,13 +63,18 @@ culprits on various operating systems include (numbers will vary):
 
 etc.
 
+For the LPCXpresso55S69, you do not need a separate UART cable.  When
+you are connected to the Debug Link (P6) and make sure that J3 is
+set to LOC (the default), and you should be able to find
+a UART using the mechanbism above.
+
 **In all further steps below, we will refer to this name as `$PORT`.**
 
 ### Two: verify connectivity
 
 Apply power to the patient.
 
-On your computer, run
+**For anything but the LPCXpresso55S69**, on your computer, run
 
 ```
 humility debugmailbox isp
@@ -75,6 +82,10 @@ humility debugmailbox isp
 
 You should see a message about finding a "plausible" debug mailbox and
 transitioning to ISP mode.
+
+**For the LPCXpresso55S69**: jumper J10 closed (**not** the default!).
+(If you are morally opposed to jumpers, you can also hold down the ISP
+button (S1) and press the Reset button (S4).
 
 **If this does not work:** check power and your SWD dongle; the UART dongle is
 not involved just yet.
