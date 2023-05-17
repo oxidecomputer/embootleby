@@ -8,6 +8,7 @@ use lpc55_areas::{CMPAPage, CFPAPage};
 use lpc55_isp::cmd::*;
 use lpc55_isp::isp::do_ping;
 use serialport::{DataBits, FlowControl, Parity, StopBits};
+use sha2::{Sha256, Digest};
 use zip::ZipArchive;
 use std::io::{Read, ErrorKind};
 use std::path::PathBuf;
@@ -35,6 +36,22 @@ enum Cmd {
     /// Install the configuration from a bundle file.
     Install {
         bundle: PathBuf,
+    },
+    /// Permanently lock the CMPA contents on a device. Make really sure you
+    /// want to do this before doing it.
+    ///
+    /// If the device has previously booted using the existing
+    /// CMPA/CFPA/firmware contents, then locking it will _probably_ not brick
+    /// it, because we read out and modify the existing CMPA.
+    Lock {
+        /// Read out the CMPA and compute the lock hash, but don't make any
+        /// changes to the chip.
+        #[clap(short = 'n', long)]
+        dry_run: bool,
+        /// Required to actually perform locking as positive confirmation (as
+        /// opposed to simply the absence of `--dry-run`).
+        #[clap(long)]
+        yes_really: bool,
     },
 }
 
@@ -194,6 +211,47 @@ fn main() -> Result<()> {
             println!("e.g.");
             println!("humility debugmailbox debug");
             println!("humility -a the-image-i-want.zip flash");
+        }
+        Cmd::Lock { dry_run, yes_really } => {
+            println!("Reading current CMPA contents...");
+            let img_cmpa = do_isp_read_memory(&mut *port, 0x9_e400, 512)
+                .context("reading CMPA")?;
+            let img_cmpa: [u8; 512] = img_cmpa.try_into().unwrap();
+
+            // For the heck of it -- parse the CMPA and decline to proceed if it
+            // won't parse, to try and prevent locking nonsense into the CMPA.
+            let _cmpa = CMPAPage::from_bytes(&img_cmpa)
+                .context("parsing CMPA")?;
+
+            println!("Computing locking hash...");
+            let mut image_hash = Sha256::new();
+            image_hash.update(&img_cmpa);
+            let image_hash = image_hash.finalize();
+
+            print!("image hash: ");
+            for byte in &image_hash {
+                print!("{byte:02x}");
+            }
+            println!();
+
+            if dry_run {
+                println!("You requested a dry run; no changes have been \
+                    written back.");
+                return Ok(());
+            }
+
+            if !yes_really {
+                println!("This operation will IRREVERSIBLY lock the device.");
+                println!("If this is really what you wanted, re-run with the flag:");
+                println!("    --yes-really");
+                bail!("user did not confirm lock action");
+            }
+
+            println!("Erasing CMPA...");
+            do_isp_write_memory(&mut *port, 0x9e400, vec![0; 512])?;
+            println!("Writing new CMPA...");
+            do_isp_write_memory(&mut *port, 0x9e400, img_cmpa.to_vec())?;
+            println!("done!");
         }
     }
 
