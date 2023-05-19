@@ -138,6 +138,7 @@ fn main() -> Result<()> {
                 .context("parsing CFPA")?;
 
             // Basic checks to try and detect mixups.
+            log_verify_only_on_failure();
             lpc55_sign::verify::verify_image(
                 &img_bootleby,
                 cmpa,
@@ -225,7 +226,7 @@ fn main() -> Result<()> {
 
             println!("Computing locking hash...");
             let mut image_hash = Sha256::new();
-            image_hash.update(&img_cmpa);
+            image_hash.update(&img_cmpa[..512 - 32]);
             let image_hash = image_hash.finalize();
 
             print!("image hash: ");
@@ -234,9 +235,17 @@ fn main() -> Result<()> {
             }
             println!();
 
+            // Overwrite the last 32 bytes with the SHA2-256 hash of the first
+            // 480 bytes, which is what indicates to the ROM that it is locked.
+            let mut locked_cmpa = img_cmpa;
+            locked_cmpa[512 - 32..].copy_from_slice(&image_hash);
+
             if dry_run {
                 println!("You requested a dry run; no changes have been \
                     written back.");
+                println!("CMPA that would be written:");
+                println!("{}", pretty_hex::pretty_hex(&locked_cmpa));
+
                 return Ok(());
             }
 
@@ -250,10 +259,26 @@ fn main() -> Result<()> {
             println!("Erasing CMPA...");
             do_isp_write_memory(&mut *port, 0x9e400, vec![0; 512])?;
             println!("Writing new CMPA...");
-            do_isp_write_memory(&mut *port, 0x9e400, img_cmpa.to_vec())?;
+            do_isp_write_memory(&mut *port, 0x9e400, locked_cmpa.to_vec())?;
             println!("done!");
         }
     }
 
     Ok(())
+}
+
+/// The only way the `lpc55_sign` verify code produces any useful output is
+/// through human-readable log messages sent to the system logger. So if we want
+/// to have any control over its behavior, we have to set up such a logger.
+///
+/// Here's the minimal setup I could come up with that filters out its
+/// "everything is okay" chatter at info and finer levels:
+fn log_verify_only_on_failure() {
+    let mut builder = env_logger::Builder::from_default_env();
+    builder
+        .filter(
+            Some("lpc55_sign"),
+            log::LevelFilter::Warn,
+        )
+        .init();
 }
