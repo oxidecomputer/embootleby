@@ -2,7 +2,8 @@
 
 Intended audience:
 
-- You have a Gimlet, Sidecar, PSC, or LPCXpresso55S69 eval board
+- You have a Gimlet, Sidecar, PSC, RoT Carrier-Carrier, or LPCXpresso55S69 eval
+  board
 - It is compatible (see below)
 - It was set up before May 2023.
 
@@ -31,6 +32,7 @@ Sorry about that.
     - PSC B or later
     - Sidecar B or later
     - LPCXpresso55S69 eval board
+    - RoT Carrier with carrier-carrier board and an LPC55S69 (_not_ an S28).
 
 - For all but the LPCXpresso55S69, a 3.3V serial cable ("UART cable").
 - An MCULink, LPCLink, or other CMSIS-DAP compatible SWD programming dongle.
@@ -45,13 +47,15 @@ Sorry about that.
 
 ### One: connect the things
 
-For Gimlet/PSC/Sidecar, with power off, connect:
+For everything _but_ LPC55Xpresso, with power off, connect:
 
 - the SWD dongle to the RoT's programming header
 - the UART cable to the RoT's UART header.
 - the USB end of each to your computer.
 
 You will need both cables attached for basically the whole process.
+
+(For LPC55xpresso, just connect the debug link cable.)
 
 Identify the name used by your operating system for your UART cable. Likely
 culprits on various operating systems include (numbers will vary):
@@ -66,7 +70,7 @@ etc.
 For the LPCXpresso55S69, you do not need a separate UART cable.  When
 you are connected to the Debug Link (P6) and make sure that J3 is
 set to LOC (the default), and you should be able to find
-a UART using the mechanbism above.
+a UART using the mechanism above.
 
 **In all further steps below, we will refer to this name as `$PORT`.**
 
