@@ -35,6 +35,17 @@ enum Cmd {
     Ping,
     /// Install the configuration from a bundle file.
     Install {
+        /// Rather than just erasing bootleby's area, erases all of the
+        /// nonprotected flash region. This will blow away any previous
+        /// non-bootleby firmware, stored data, identity keys, and the like.
+        #[clap(long, short)]
+        erase_all: bool,
+
+        /// Path to a Bootleby Bundle, which is a ZIP file containing three
+        /// files:
+        /// - `cmpa.bin` gives the CMPA contents.
+        /// - `cfpa.bin` gives the CFPA contents.
+        /// - `bootleby.bin` gives the Bootleby code as a raw image.
         bundle: PathBuf,
     },
     /// Permanently lock the CMPA contents on a device. Make really sure you
@@ -95,7 +106,7 @@ fn main() -> Result<()> {
             do_ping(&mut *port)?;
             println!("ping success.");
         }
-        Cmd::Install { bundle } => {
+        Cmd::Install { erase_all, bundle } => {
             // Load bundle
             let bundle_reader = std::fs::File::open(&bundle)
                 .with_context(|| format!("loading {}", bundle.display()))?;
@@ -147,15 +158,25 @@ fn main() -> Result<()> {
 
             println!("bundle appears ok");
 
+            // This is the point where we begin interacting with the part.
+
             println!("checking serial connection and ISP mode...");
             // Do a ping to check basic connectivity.
             do_ping(&mut *port)?;
             println!("success.");
 
+            // This is the part where we begin doing things that are potentially
+            // side-effecting.
+
             // Write bootleby image.
-            println!("Erasing boot area...");
-            do_isp_flash_erase_region(&mut *port, 0, 0x10000)
-                .context("erasing boot area")?;
+            let (name, size) = if erase_all {
+                ("all of flash", 0x9_de00)
+            } else {
+                ("boot area", 0x1_0000)
+            };
+            println!("Erasing {name}...");
+            do_isp_flash_erase_region(&mut *port, 0, size)
+                .context("erasing requested section")?;
             println!("Writing bootleby image...");
             do_isp_write_memory(&mut *port, 0, img_bootleby)
                 .context("writing bootleby")?;
