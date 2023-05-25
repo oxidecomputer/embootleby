@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 /// A tool for upgrading an Oxide board to verified boot using bogus keys.
 #[derive(Debug, Parser)]
+#[command(version)]
 struct Embootleby {
     /// Name of serial port where the LPC55 is connected.
     port: String,
