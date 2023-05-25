@@ -242,8 +242,10 @@ fn main() -> Result<()> {
             // Round up to page count.
             let bb_pages = (bb_size + 512 - 1) / 512;
             // Extract Bootleby image.
-            let bootleby = do_isp_read_memory(&mut *port, 0, bb_pages * 512)
+            let mut bootleby = do_isp_read_memory(&mut *port, 0, bb_pages * 512)
                 .context("reading bootleby")?;
+            // Trim off trailing bytes.
+            bootleby.truncate(bb_size as usize);
 
             // Extract CMPA.
             println!("reading CMPA");
