@@ -7,7 +7,7 @@ use clap::Parser;
 use lpc55_areas::{CMPAPage, CFPAPage};
 use lpc55_isp::cmd::*;
 use lpc55_isp::isp::do_ping;
-use serialport::{DataBits, FlowControl, Parity, StopBits};
+use serialport::{DataBits, FlowControl, Parity, StopBits, SerialPort};
 use sha2::{Sha256, Digest};
 use zip::ZipArchive;
 use std::io::{Read, ErrorKind};
@@ -48,6 +48,10 @@ enum Cmd {
         /// - `bootleby.bin` gives the Bootleby code as a raw image.
         bundle: PathBuf,
     },
+    /// Reads the configuration out of an embootleby'd processor and looks for
+    /// problems that would prevent booting.
+    #[clap(alias = "wtf")]
+    Check,
     /// Permanently lock the CMPA contents on a device. Make really sure you
     /// want to do this before doing it.
     ///
@@ -185,16 +189,9 @@ fn main() -> Result<()> {
             // Write CFPA - determine correct version for chip.
             println!("checking current CFPA...");
             {
-                // Read the current CFPA areas to figure out what version we
-                // need to set.
-                let ping = do_isp_read_memory(&mut *port, 0x9_e000, 512)?;
-                let pong = do_isp_read_memory(&mut *port, 0x9_e200, 512)?;
-
-                let ping = lpc55_areas::CFPAPage::from_bytes(ping[..].try_into().unwrap())?;
-                let pong = lpc55_areas::CFPAPage::from_bytes(pong[..].try_into().unwrap())?;
-
-                let start_version = u32::max(ping.version, pong.version);
-                cfpa.version = start_version + 1;
+                let current_cfpa = read_current_cfpa(&mut *port)
+                    .context("reading current CFPA")?;
+                cfpa.version = current_cfpa.version + 1;
                 println!("note: new CFPA version is {}", cfpa.version);
             }
             println!("Writing CFPA...");
@@ -233,6 +230,55 @@ fn main() -> Result<()> {
             println!("e.g.");
             println!("humility debugmailbox debug");
             println!("humility -a the-image-i-want.zip flash");
+        }
+        Cmd::Check => {
+            println!("*** Extracting stuff from the chip ***");
+            println!("(Failures in this section indicate either a comms problem,");
+            println!("or your chip is locked. See if you can raise the chip via");
+            println!("embootleby ping a few times to check comms.)");
+
+            // Read first 512 bytes of flash to get Bootleby image geometry. We
+            // have to do this to avoid reading erased sectors, because reading
+            // erased sectors makes ISP mad.
+            let first_sector = do_isp_read_memory(&mut *port, 0, 512)
+                .context("reading first sector (is flash empty?)")?;
+            // NXP-style images have the image length at 0x20 as a u32.
+            let bb_size = u32::from_le_bytes(first_sector[0x20..0x24].try_into().unwrap());
+            // Round up to page count.
+            let bb_pages = (bb_size + 512 - 1) / 512;
+            // Extract Bootleby image.
+            let mut bootleby = do_isp_read_memory(&mut *port, 0, bb_pages * 512)
+                .context("reading bootleby")?;
+            // Trim off trailing bytes.
+            bootleby.truncate(bb_size as usize);
+
+            // Extract CMPA.
+            println!("reading CMPA");
+            let img_cmpa = do_isp_read_memory(&mut *port, 0x9e400, 512)
+                .context("reading CMPA")?;
+            let img_cmpa: &[u8; 512] = img_cmpa[..].try_into().unwrap();
+
+            let cmpa = CMPAPage::from_bytes(img_cmpa)
+                .context("parsing CMPA")?;
+
+            // Extract CFPA.
+            println!("reading CFPA(s)");
+            let cfpa = read_current_cfpa(&mut *port)
+                .context("reading CFPA")?;
+
+            println!("*** Checking Bootleby Image - begin verification spam! ***");
+            log_verify_verbose();
+            lpc55_sign::verify::verify_image(
+                &bootleby,
+                cmpa,
+                cfpa.clone(),
+            ).context("verifying image")?;
+
+            println!("*** Bootleby image is intact and matches CMPA/CFPA ***");
+
+            println!("Your slot A/B firmware images might still be bad.");
+            println!("Someday this tool will check them for you!");
+            println!("Today is not that day.");
         }
         Cmd::Lock { dry_run, yes_really } => {
             println!("Reading current CMPA contents...");
@@ -302,4 +348,30 @@ fn log_verify_only_on_failure() {
             log::LevelFilter::Warn,
         )
         .init();
+}
+
+/// Produces more verbose output from `lpc55_sign`.
+fn log_verify_verbose() {
+    let mut builder = env_logger::Builder::from_default_env();
+    builder
+        .filter(
+            Some("lpc55_sign"),
+            log::LevelFilter::Info,
+        )
+        .init();
+}
+
+/// Read the current CFPA areas and find the active one.
+fn read_current_cfpa(port: &mut dyn SerialPort) -> Result<lpc55_areas::CFPAPage>{
+    let ping = do_isp_read_memory(port, 0x9_e000, 512)?;
+    let pong = do_isp_read_memory(port, 0x9_e200, 512)?;
+
+    let ping = lpc55_areas::CFPAPage::from_bytes(ping[..].try_into().unwrap())?;
+    let pong = lpc55_areas::CFPAPage::from_bytes(pong[..].try_into().unwrap())?;
+
+    Ok(if ping.version > pong.version {
+        ping
+    } else {
+        pong
+    })
 }
