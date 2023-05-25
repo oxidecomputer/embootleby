@@ -232,8 +232,17 @@ fn main() -> Result<()> {
             println!("humility -a the-image-i-want.zip flash");
         }
         Cmd::Check => {
+            // Read first 512 bytes of flash to get Bootleby image geometry. We
+            // have to do this to avoid reading erased sectors, because reading
+            // erased sectors makes ISP mad.
+            let first_sector = do_isp_read_memory(&mut *port, 0, 512)
+                .context("reading first sector (is flash empty?)")?;
+            // NXP-style images have the image length at 0x20 as a u32.
+            let bb_size = u32::from_le_bytes(first_sector[0x20..0x24].try_into().unwrap());
+            // Round up to page count.
+            let bb_pages = (bb_size + 512 - 1) / 512;
             // Extract Bootleby image.
-            let bootleby = do_isp_read_memory(&mut *port, 0, 0x1_0000)
+            let bootleby = do_isp_read_memory(&mut *port, 0, bb_pages * 512)
                 .context("reading bootleby")?;
 
             // Extract CMPA.
