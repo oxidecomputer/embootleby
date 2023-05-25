@@ -232,6 +232,10 @@ fn main() -> Result<()> {
             println!("humility -a the-image-i-want.zip flash");
         }
         Cmd::Check => {
+            // Extract Bootleby image.
+            let bootleby = do_isp_read_memory(&mut *port, 0, 0x1_0000)
+                .context("reading bootleby")?;
+
             // Extract CMPA.
             println!("reading CMPA");
             let img_cmpa = do_isp_read_memory(&mut *port, 0x9e400, 512)
@@ -245,10 +249,6 @@ fn main() -> Result<()> {
             println!("reading CFPA(s)");
             let cfpa = read_current_cfpa(&mut *port)
                 .context("reading CFPA")?;
-
-            // Extract Bootleby image.
-            let bootleby = do_isp_read_memory(&mut *port, 0, 0x1_0000)
-                .context("reading bootleby")?;
 
             log_verify_verbose();
             lpc55_sign::verify::verify_image(
