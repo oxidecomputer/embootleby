@@ -7,7 +7,7 @@ use clap::Parser;
 use lpc55_areas::{CMPAPage, CFPAPage};
 use lpc55_isp::cmd::*;
 use lpc55_isp::isp::do_ping;
-use serialport::{DataBits, FlowControl, Parity, StopBits};
+use serialport::{DataBits, FlowControl, Parity, StopBits, SerialPort};
 use sha2::{Sha256, Digest};
 use zip::ZipArchive;
 use std::io::{Read, ErrorKind};
@@ -48,6 +48,10 @@ enum Cmd {
         /// - `bootleby.bin` gives the Bootleby code as a raw image.
         bundle: PathBuf,
     },
+    /// Reads the configuration out of an embootleby'd processor and looks for
+    /// problems that would prevent booting.
+    #[clap(alias = "wtf")]
+    Check,
     /// Permanently lock the CMPA contents on a device. Make really sure you
     /// want to do this before doing it.
     ///
@@ -185,16 +189,9 @@ fn main() -> Result<()> {
             // Write CFPA - determine correct version for chip.
             println!("checking current CFPA...");
             {
-                // Read the current CFPA areas to figure out what version we
-                // need to set.
-                let ping = do_isp_read_memory(&mut *port, 0x9_e000, 512)?;
-                let pong = do_isp_read_memory(&mut *port, 0x9_e200, 512)?;
-
-                let ping = lpc55_areas::CFPAPage::from_bytes(ping[..].try_into().unwrap())?;
-                let pong = lpc55_areas::CFPAPage::from_bytes(pong[..].try_into().unwrap())?;
-
-                let start_version = u32::max(ping.version, pong.version);
-                cfpa.version = start_version + 1;
+                let current_cfpa = read_current_cfpa(&mut *port)
+                    .context("reading current CFPA")?;
+                cfpa.version = current_cfpa.version + 1;
                 println!("note: new CFPA version is {}", cfpa.version);
             }
             println!("Writing CFPA...");
@@ -233,6 +230,35 @@ fn main() -> Result<()> {
             println!("e.g.");
             println!("humility debugmailbox debug");
             println!("humility -a the-image-i-want.zip flash");
+        }
+        Cmd::Check => {
+            // Extract CMPA.
+            println!("reading CMPA");
+            let img_cmpa = do_isp_read_memory(&mut *port, 0x9e400, 512)
+                .context("reading CMPA")?;
+            let img_cmpa: &[u8; 512] = img_cmpa[..].try_into().unwrap();
+
+            let cmpa = CMPAPage::from_bytes(img_cmpa)
+                .context("parsing CMPA")?;
+
+            // Extract CFPA.
+            println!("reading CFPA(s)");
+            let cfpa = read_current_cfpa(&mut *port)
+                .context("reading CFPA")?;
+
+            // Extract Bootleby image.
+            let bootleby = do_isp_read_memory(&mut *port, 0, 0x1_0000)
+                .context("reading bootleby")?;
+
+            log_verify_verbose();
+            lpc55_sign::verify::verify_image(
+                &bootleby,
+                cmpa,
+                cfpa.clone(),
+            ).context("verifying image")?;
+
+            println!("bundle appears ok");
+
         }
         Cmd::Lock { dry_run, yes_really } => {
             println!("Reading current CMPA contents...");
@@ -302,4 +328,30 @@ fn log_verify_only_on_failure() {
             log::LevelFilter::Warn,
         )
         .init();
+}
+
+/// Produces more verbose output from `lpc55_sign`.
+fn log_verify_verbose() {
+    let mut builder = env_logger::Builder::from_default_env();
+    builder
+        .filter(
+            Some("lpc55_sign"),
+            log::LevelFilter::Info,
+        )
+        .init();
+}
+
+/// Read the current CFPA areas and find the active one.
+fn read_current_cfpa(port: &mut dyn SerialPort) -> Result<lpc55_areas::CFPAPage>{
+    let ping = do_isp_read_memory(port, 0x9_e000, 512)?;
+    let pong = do_isp_read_memory(port, 0x9_e200, 512)?;
+
+    let ping = lpc55_areas::CFPAPage::from_bytes(ping[..].try_into().unwrap())?;
+    let pong = lpc55_areas::CFPAPage::from_bytes(pong[..].try_into().unwrap())?;
+
+    Ok(if ping.version > pong.version {
+        ping
+    } else {
+        pong
+    })
 }
