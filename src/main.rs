@@ -183,7 +183,7 @@ fn main() -> Result<()> {
             do_isp_flash_erase_region(&mut *port, 0, size)
                 .context("erasing requested section")?;
             println!("Writing bootleby image...");
-            do_isp_write_memory(&mut *port, 0, img_bootleby)
+            do_isp_write_memory(&mut *port, 0, &img_bootleby)
                 .context("writing bootleby")?;
             println!("written OK");
 
@@ -198,15 +198,15 @@ fn main() -> Result<()> {
             println!("Writing CFPA...");
             {
                 let new_bytes = cfpa.to_vec()?;
-                do_isp_write_memory(&mut *port, 0x9_de00, new_bytes)?;
+                do_isp_write_memory(&mut *port, 0x9_de00, &new_bytes)?;
             }
             println!("done");
 
             // Write CMPA
             println!("Erasing CMPA...");
-            do_isp_write_memory(&mut *port, 0x9e400, vec![0; 512])?;
+            do_isp_write_memory(&mut *port, 0x9e400, &[0; 512])?;
             println!("Writing new CMPA...");
-            do_isp_write_memory(&mut *port, 0x9e400, img_cmpa.to_vec())?;
+            do_isp_write_memory(&mut *port, 0x9e400, img_cmpa)?;
             println!("done");
 
             // Enroll
@@ -325,9 +325,9 @@ fn main() -> Result<()> {
             }
 
             println!("Erasing CMPA...");
-            do_isp_write_memory(&mut *port, 0x9e400, vec![0; 512])?;
+            do_isp_write_memory(&mut *port, 0x9e400, &[0; 512])?;
             println!("Writing new CMPA...");
-            do_isp_write_memory(&mut *port, 0x9e400, locked_cmpa.to_vec())?;
+            do_isp_write_memory(&mut *port, 0x9e400, &locked_cmpa)?;
             println!("done!");
         }
     }

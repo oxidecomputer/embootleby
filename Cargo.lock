@@ -595,7 +595,7 @@ dependencies = [
 [[package]]
 name = "lpc55_areas"
 version = "0.2.4"
-source = "git+https://github.com/oxidecomputer/lpc55_support/#8bbd6793ab341937f5cc75148f981d212e9246c1"
+source = "git+https://github.com/oxidecomputer/lpc55_support/#cfd31243fbbe6768338cabf012928e5ed1c2b007"
 dependencies = [
  "bitfield",
  "clap",
@@ -605,8 +605,8 @@ dependencies = [
 
 [[package]]
 name = "lpc55_isp"
-version = "0.2.2"
-source = "git+https://github.com/oxidecomputer/lpc55_support/#8bbd6793ab341937f5cc75148f981d212e9246c1"
+version = "0.3.0"
+source = "git+https://github.com/oxidecomputer/lpc55_support/#cfd31243fbbe6768338cabf012928e5ed1c2b007"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -622,12 +622,13 @@ dependencies = [
  "sha2",
  "strum",
  "strum_macros",
+ "thiserror",
 ]
 
 [[package]]
 name = "lpc55_sign"
 version = "0.3.1"
-source = "git+https://github.com/oxidecomputer/lpc55_support/#8bbd6793ab341937f5cc75148f981d212e9246c1"
+source = "git+https://github.com/oxidecomputer/lpc55_support/#cfd31243fbbe6768338cabf012928e5ed1c2b007"
 dependencies = [
  "byteorder",
  "const-oid",
