@@ -68,6 +68,10 @@ enum Cmd {
         /// opposed to simply the absence of `--dry-run`).
         #[clap(long)]
         yes_really: bool,
+        /// Set this if you'd like to leave the debug port open. Don't do this
+        /// with prod keys, it's rude.
+        #[clap(long)]
+        leave_debug_open: bool,
     },
 }
 
@@ -281,18 +285,55 @@ fn main() -> Result<()> {
             println!("Someday this tool will check them for you!");
             println!("Today is not that day.");
         }
-        Cmd::Lock { dry_run, yes_really } => {
+        Cmd::Lock { dry_run, yes_really, leave_debug_open } => {
             println!("Reading current CMPA contents...");
             let img_cmpa = do_isp_read_memory(&mut *port, 0x9_e400, 512)
                 .context("reading CMPA")?;
-            let img_cmpa: [u8; 512] = img_cmpa.try_into().unwrap();
+            let cmpa: [u8; 512] = img_cmpa.try_into().unwrap();
 
             // For the heck of it -- parse the CMPA and decline to proceed if it
             // won't parse, to try and prevent locking nonsense into the CMPA.
-            let _cmpa = CMPAPage::from_bytes(&img_cmpa)
+            let mut cmpa = CMPAPage::from_bytes(&cmpa)
                 .context("parsing CMPA")?;
 
+            // Note: PIN=0 + DEFAULT=0 means debug-auth-only
+            let cc_socu_target = 0xFFFF_0000;
+            if !leave_debug_open {
+                if cmpa.cc_socu_pin != cc_socu_target {
+                    println!("Note: CMPA.CC_SOCU_PIN was permissive, overriding to disable debug.");
+                    cmpa.cc_socu_pin = cc_socu_target;
+                }
+                if cmpa.cc_socu_dflt != cc_socu_target {
+                    println!("Note: CMPA.CC_SOCU_DFLT was permissive, overriding to disable debug.");
+                    cmpa.cc_socu_dflt = cc_socu_target;
+                }
+            }
+
+            println!("Reading current CFPA contents...");
+            let mut cfpa = read_current_cfpa(&mut *port)
+                .context("reading CFPA")?;
+            let mut cfpa_update_required = false;
+            if !leave_debug_open {
+                if cfpa.dcfg_cc_socu_ns_pin != cc_socu_target {
+                    println!("Note: CFPA.CC_SOCU_NS_PIN was permissive, overriding to disable debug.");
+                    cfpa.dcfg_cc_socu_ns_pin = cc_socu_target;
+                    cfpa_update_required = true;
+                }
+                if cfpa.dcfg_cc_socu_ns_dflt != cc_socu_target {
+                    println!("Note: CFPA.CC_SOCU_NS_DFLT was permissive, overriding to disable debug.");
+                    cfpa.dcfg_cc_socu_ns_dflt = cc_socu_target;
+                    cfpa_update_required = true;
+                }
+            }
+
+            if cfpa_update_required {
+                cfpa.version = cfpa.version.wrapping_add(1);
+                println!("Bumping CFPA version to {}", cfpa.version);
+            }
+
             println!("Computing locking hash...");
+            let img_cmpa = cmpa.to_vec()
+                .context("Re-packing CMPA failed")?;
             let mut image_hash = Sha256::new();
             image_hash.update(&img_cmpa[..512 - 32]);
             let image_hash = image_hash.finalize();
@@ -308,9 +349,17 @@ fn main() -> Result<()> {
             let mut locked_cmpa = img_cmpa;
             locked_cmpa[512 - 32..].copy_from_slice(&image_hash);
 
+            let final_cfpa = cfpa.to_vec().unwrap();
+
             if dry_run {
                 println!("You requested a dry run; no changes have been \
                     written back.");
+
+                if cfpa_update_required {
+                    println!("CFPA that would be written:");
+                    println!("{}", pretty_hex::pretty_hex(&final_cfpa));
+                }
+
                 println!("CMPA that would be written:");
                 println!("{}", pretty_hex::pretty_hex(&locked_cmpa));
 
@@ -324,10 +373,16 @@ fn main() -> Result<()> {
                 bail!("user did not confirm lock action");
             }
 
+            if cfpa_update_required {
+                println!("Writing CFPA scratch page...");
+                do_isp_write_memory(&mut *port, 0x9_de00, &final_cfpa)?;
+                println!("done!");
+            }
+
             println!("Erasing CMPA...");
-            do_isp_write_memory(&mut *port, 0x9e400, &[0; 512])?;
+            do_isp_write_memory(&mut *port, 0x9_e400, &[0; 512])?;
             println!("Writing new CMPA...");
-            do_isp_write_memory(&mut *port, 0x9e400, &locked_cmpa)?;
+            do_isp_write_memory(&mut *port, 0x9_e400, &locked_cmpa)?;
             println!("done!");
         }
     }
