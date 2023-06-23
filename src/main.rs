@@ -351,17 +351,19 @@ fn main() -> Result<()> {
 
             let final_cfpa = cfpa.to_vec().unwrap();
 
+            if cfpa_update_required {
+                println!("Intended CFPA contents:");
+                println!("{}", pretty_hex::pretty_hex(&final_cfpa));
+            } else {
+                println!("CFPA update not required.");
+            }
+
+            println!("Intended CMPA contents:");
+            println!("{}", pretty_hex::pretty_hex(&locked_cmpa));
+
             if dry_run {
                 println!("You requested a dry run; no changes have been \
                     written back.");
-
-                if cfpa_update_required {
-                    println!("CFPA that would be written:");
-                    println!("{}", pretty_hex::pretty_hex(&final_cfpa));
-                }
-
-                println!("CMPA that would be written:");
-                println!("{}", pretty_hex::pretty_hex(&locked_cmpa));
 
                 return Ok(());
             }
