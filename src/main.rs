@@ -72,6 +72,14 @@ enum Cmd {
         /// with prod keys, it's rude.
         #[clap(long)]
         leave_debug_open: bool,
+        /// Requires that a subset of keys are enabled (and only that subset).
+        /// This flag takes a bitmask (in the base of your choice as long as
+        /// it's not octal) where bit 0 maps to RoTK 0, 1 maps to 1, and so
+        /// forth. If keys corresponding to 1 bits are not enabled, and keys
+        /// corresponding to 0 bits are not *not* enabled, this will decline to
+        /// lock.
+        #[clap(long, value_parser = parse_int::parse::<u8>)]
+        require_key_enable_shape: Option<u8>,
     },
 }
 
@@ -285,7 +293,7 @@ fn main() -> Result<()> {
             println!("Someday this tool will check them for you!");
             println!("Today is not that day.");
         }
-        Cmd::Lock { dry_run, yes_really, leave_debug_open } => {
+        Cmd::Lock { dry_run, yes_really, leave_debug_open, require_key_enable_shape } => {
             println!("Reading current CMPA contents...");
             let img_cmpa = do_isp_read_memory(&mut *port, 0x9_e400, 512)
                 .context("reading CMPA")?;
@@ -323,6 +331,36 @@ fn main() -> Result<()> {
                     println!("Note: CFPA.CC_SOCU_NS_DFLT was permissive, overriding to disable debug.");
                     cfpa.dcfg_cc_socu_ns_dflt = cc_socu_target;
                     cfpa_update_required = true;
+                }
+            }
+            if let Some(keymask) = require_key_enable_shape {
+                // The user has requested that we ensure the CFPA has a
+                // particular set of keys enabled, and no others, before
+                // locking. Let's get to it. The ROTKH_REVOKE word is a 32-bit
+                // field with the interesting bits in its least significant
+                // byte. In each field, `0b01` represents enabled, `0b00`
+                // represents invalid (which could become enabled later), and
+                // `0b10` represents revoked.
+                //
+                // We require things to either be enabled or invalid, not
+                // revoked, because that's the use case this was written for.
+                let required = {
+                    let mut bits = 0;
+                    for bit in 0..4 {
+                        if keymask & (1 << bit) != 0 {
+                            bits |= 0b01 << (2 * bit);
+                        }
+                    }
+                    bits
+                };
+                if cfpa.rkth_revoke != required {
+                    println!("**** FAILED KEY CHECKS ****");
+                    println!("You provided a key shape requirement mask,");
+                    println!("but the CFPA doesn't meet it.");
+                    println!("required: {required:02x}");
+                    println!("found:    {:02x}", cfpa.rkth_revoke);
+
+                    bail!("cannot proceed, key requirements not met");
                 }
             }
 
