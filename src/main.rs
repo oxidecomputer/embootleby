@@ -344,23 +344,23 @@ fn main() -> Result<()> {
                 //
                 // We require things to either be enabled or invalid, not
                 // revoked, because that's the use case this was written for.
-                let required = {
-                    let mut bits = 0;
-                    for bit in 0..4 {
-                        if keymask & (1 << bit) != 0 {
-                            bits |= 0b01 << (2 * bit);
-                        }
-                    }
-                    bits
-                };
-                if cfpa.rkth_revoke != required {
-                    println!("**** FAILED KEY CHECKS ****");
-                    println!("You provided a key shape requirement mask,");
-                    println!("but the CFPA doesn't meet it.");
-                    println!("required: {required:02x}");
-                    println!("found:    {:02x}", cfpa.rkth_revoke);
+                for slot in 0..4 {
+                    let required_state = keymask & (1 << slot) != 0;
 
-                    bail!("cannot proceed, key requirements not met");
+                    let found_state = match cfpa.rkth_revoke >> (2 * slot) & 0x3 {
+                        0b01 => true,
+                        _ => false,
+                    };
+
+                    if required_state != found_state {
+                        println!("**** FAILED KEY CHECKS ****");
+                        println!("You provided a key shape requirement mask,");
+                        println!("but the CFPA doesn't meet it.");
+                        println!("required: {keymask:02x}");
+                        println!("found:    {:02x}", cfpa.rkth_revoke);
+
+                        bail!("cannot proceed, key requirements not met");
+                    }
                 }
             }
 
