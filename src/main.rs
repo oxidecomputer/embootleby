@@ -320,6 +320,7 @@ fn main() -> Result<()> {
             println!("Reading current CFPA contents...");
             let mut cfpa = read_current_cfpa(&mut *port)
                 .context("reading CFPA")?;
+            println!("CFPA version = {}", cfpa.version);
             let mut cfpa_update_required = false;
             if !leave_debug_open {
                 if cfpa.dcfg_cc_socu_ns_pin != cc_socu_target {
