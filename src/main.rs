@@ -182,6 +182,28 @@ fn main() -> Result<()> {
             do_ping(&mut *port)?;
             println!("success.");
 
+            println!("checking current CFPA...");
+            {
+                let current_cfpa = read_current_cfpa(&mut *port)
+                    .context("reading current CFPA")?;
+
+                // RKTH_REVOKE bits may only be changed from 0 to 1.  Check if
+                // new CFPA would attempt to change any from 1 to 0.
+                if (current_cfpa.rkth_revoke | cfpa.rkth_revoke) != cfpa.rkth_revoke {
+                    println!("**** FAILED KEY CHECKS ****");
+                    println!("Bundle's CFPA would attempt to change an");
+                    println!("RKTH_REVOKE bit from 1 to 0.  Only 0 to 1");
+                    println!("transitions are allowed.");
+                    println!("bundle RKTH_REVOKE: {:02x}", cfpa.rkth_revoke);
+                    println!("device RKTH_REVOKE: {:02x}", current_cfpa.rkth_revoke);
+
+                    bail!("cannot proceed, CFPA would be rejected by ROM");
+                }
+
+                cfpa.version = current_cfpa.version + 1;
+                println!("note: new CFPA version is {}", cfpa.version);
+            }
+
             // This is the part where we begin doing things that are potentially
             // side-effecting.
 
@@ -200,13 +222,6 @@ fn main() -> Result<()> {
             println!("written OK");
 
             // Write CFPA - determine correct version for chip.
-            println!("checking current CFPA...");
-            {
-                let current_cfpa = read_current_cfpa(&mut *port)
-                    .context("reading current CFPA")?;
-                cfpa.version = current_cfpa.version + 1;
-                println!("note: new CFPA version is {}", cfpa.version);
-            }
             println!("Writing CFPA...");
             {
                 let new_bytes = cfpa.to_vec()?;
