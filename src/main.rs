@@ -48,6 +48,14 @@ enum Cmd {
         /// - `cfpa.bin` gives the CFPA contents.
         /// - `bootleby.bin` gives the Bootleby code as a raw image.
         bundle: PathBuf,
+        /// Requires that a subset of keys are enabled (and only that subset).
+        /// This flag takes a bitmask (in the base of your choice as long as
+        /// it's not octal) where bit 0 maps to RoTK 0, 1 maps to 1, and so
+        /// forth. The install will proceed only if the bundle's CFPA is
+        /// configured such that keys corresponding to 1 bits are enabled and
+        /// keys corresponding to 0 bits are not enabled yet.
+        #[clap(long, value_parser = parse_int::parse::<u8>)]
+        require_key_enable_shape: Option<u8>,
     },
     /// Reads the configuration out of an embootleby'd processor and looks for
     /// problems that would prevent booting.
@@ -123,7 +131,7 @@ fn main() -> Result<()> {
             do_ping(&mut *port)?;
             println!("ping success.");
         }
-        Cmd::Install { erase_all, bundle } => {
+        Cmd::Install { erase_all, bundle, require_key_enable_shape } => {
             // Load bundle
             let bundle_reader = std::fs::File::open(&bundle)
                 .with_context(|| format!("loading {}", bundle.display()))?;
@@ -172,6 +180,37 @@ fn main() -> Result<()> {
                 cmpa,
                 cfpa.clone(),
             ).context("verifying image")?;
+
+            if let Some(keymask) = require_key_enable_shape {
+                // The user has requested that we ensure the CFPA has a
+                // particular set of keys enabled, and no others. Let's get to
+                // it. The ROTKH_REVOKE word is a 32-bit field with the
+                // interesting bits in its least significant byte. In each
+                // field, `0b01` represents enabled, `0b00` represents invalid
+                // (which could become enabled later), and `0b10` represents
+                // revoked.
+                //
+                // We require things to either be enabled or invalid, not
+                // revoked, because that's the use case this was written for.
+                let required = {
+                    let mut bits = 0;
+                    for bit in 0..4 {
+                        if keymask & (1 << bit) != 0 {
+                            bits |= 0b01 << (2 * bit);
+                        }
+                    }
+                    bits
+                };
+                if cfpa.rkth_revoke != required {
+                    println!("**** FAILED KEY CHECKS ****");
+                    println!("You provided a key shape requirement mask,");
+                    println!("but the bundle's CFPA doesn't meet it.");
+                    println!("required: {required:02x}");
+                    println!("found:    {:02x}", cfpa.rkth_revoke);
+
+                    bail!("cannot proceed, key requirements not met");
+                }
+            }
 
             println!("bundle appears ok");
 
