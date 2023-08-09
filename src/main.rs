@@ -2,17 +2,17 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use anyhow::{bail, Context, Result, anyhow};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
-use lpc55_areas::{CMPAPage, CFPAPage};
+use lpc55_areas::{CFPAPage, CMPAPage};
 use lpc55_isp::cmd::*;
 use lpc55_isp::isp::do_ping;
-use serialport::{DataBits, FlowControl, Parity, StopBits, SerialPort};
-use sha2::{Sha256, Digest};
-use zip::ZipArchive;
-use std::io::{Read, ErrorKind};
+use serialport::{DataBits, FlowControl, Parity, SerialPort, StopBits};
+use sha2::{Digest, Sha256};
+use std::io::{ErrorKind, Read};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use zip::ZipArchive;
 
 /// A tool for upgrading an Oxide board to verified boot using bogus keys.
 #[derive(Debug, Parser)]
@@ -49,18 +49,25 @@ enum Cmd {
         /// - `bootleby.bin` gives the Bootleby code as a raw image.
         bundle: PathBuf,
         /// Requires that a subset of keys are enabled (and only that subset).
-        /// This flag takes a bitmask (in the base of your choice as long as
-        /// it's not octal) where bit 0 maps to RoTK 0, 1 maps to 1, and so
-        /// forth. The install will proceed only if the bundle's CFPA is
-        /// configured such that keys corresponding to 1 bits are enabled and
-        /// keys corresponding to 0 bits are not enabled yet.
-        #[clap(long, value_parser = parse_int::parse::<u8>)]
-        require_key_enable_shape: Option<u8>,
+        /// This flag takes a 4 character string where 'E' represents
+        /// enabled, 'R' revoked, and 'I' invalid. Keys are specified
+        /// in order from 3 to 0. A string of EERR means keys 0 and 1
+        /// are revoked and keys 2 and 3 are enabled.
+        #[clap(long)]
+        require_key_enable_shape: Option<KeyStateTable>,
     },
     /// Reads the configuration out of an embootleby'd processor and looks for
     /// problems that would prevent booting.
     #[clap(alias = "wtf")]
-    Check,
+    Check {
+        /// Requires that a subset of keys are enabled (and only that subset).
+        /// This flag takes a 4 character string where 'E' represents
+        /// enabled, 'R' revoked, and 'I' invalid. Keys are specified
+        /// in order from 3 to 0. A string of EERR means keys 0 and 1
+        /// are revoked and keys 2 and 3 are enabled.
+        #[clap(long)]
+        require_key_enable_shape: Option<KeyStateTable>,
+    },
     /// Permanently lock the CMPA contents on a device. Make really sure you
     /// want to do this before doing it.
     ///
@@ -81,14 +88,97 @@ enum Cmd {
         #[clap(long)]
         leave_debug_open: bool,
         /// Requires that a subset of keys are enabled (and only that subset).
-        /// This flag takes a bitmask (in the base of your choice as long as
-        /// it's not octal) where bit 0 maps to RoTK 0, 1 maps to 1, and so
-        /// forth. If keys corresponding to 1 bits are not enabled, and keys
-        /// corresponding to 0 bits are not *not* enabled, this will decline to
-        /// lock.
-        #[clap(long, value_parser = parse_int::parse::<u8>)]
-        require_key_enable_shape: Option<u8>,
+        /// This flag takes a 4 character string where 'E' represents
+        /// enabled, 'R' revoked, and 'I' invalid. Keys are specified
+        /// in order from 3 to 0. A string of EERR means keys 0 and 1
+        /// are revoked and keys 2 and 3 are enabled.
+        /// If the bits do not match this will decline to lock!
+        #[clap(long)]
+        require_key_enable_shape: Option<KeyStateTable>,
     },
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum KeyState {
+    Invalid,
+    Enabled,
+    Revoked,
+}
+
+impl std::fmt::Display for KeyState {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match *self {
+            KeyState::Invalid => write!(f, "i"),
+            KeyState::Enabled => write!(f, "e"),
+            KeyState::Revoked => write!(f, "r"),
+        }
+    }
+}
+
+// Definitions for these come from the NXP manual
+impl TryFrom<u32> for KeyState {
+    type Error = anyhow::Error;
+    fn try_from(v: u32) -> Result<Self, Self::Error> {
+        Ok(match v {
+            0b00 => Self::Invalid,
+            0b01 => Self::Enabled,
+            0b10 | 0b11 => Self::Revoked,
+            _ => bail!("invalid value {v}"),
+        })
+    }
+}
+
+impl TryFrom<char> for KeyState {
+    type Error = anyhow::Error;
+    fn try_from(v: char) -> Result<Self, Self::Error> {
+        Ok(match v {
+            'i' | 'I' => Self::Invalid,
+            'e' | 'E' => Self::Enabled,
+            'r' | 'R' => Self::Revoked,
+            _ => bail!("invalid value {v}"),
+        })
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct KeyStateTable([KeyState; 4]);
+
+impl std::str::FromStr for KeyStateTable {
+    type Err = anyhow::Error;
+
+    // Each letter in the string represents one entry in the
+    // ROTKH_REVOKE field. There are 4 keys, each of which
+    // is represented by 2 bits.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() != 4 {
+            bail!("invalid length, must be 4");
+        }
+        let mut out: [Option<KeyState>; 4] = [None; 4];
+        // Keys are specified in 3210 order. Reverse puts
+        // key 0 in index 0.
+        for (slot, entry) in s.chars().rev().enumerate() {
+            out[slot] = Some(entry.try_into()?);
+        }
+        Ok(Self(out.map(Option::unwrap)))
+    }
+}
+
+impl std::fmt::Display for KeyStateTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        // Display in reverse to match the 3210 order used
+        write!(f, "{}{}{}{}", self.0[3], self.0[2], self.0[1], self.0[0])
+    }
+}
+
+impl KeyStateTable {
+    fn from_rotkh_revoke(revoke: u32) -> Self {
+        KeyStateTable([
+            KeyState::try_from(revoke & 0x3).unwrap(),
+            KeyState::try_from((revoke >> 2) & 0x3).unwrap(),
+            KeyState::try_from((revoke >> 4) & 0x3).unwrap(),
+            KeyState::try_from((revoke >> 6) & 0x3).unwrap(),
+        ])
+    }
 }
 
 fn main() -> Result<()> {
@@ -131,82 +221,68 @@ fn main() -> Result<()> {
             do_ping(&mut *port)?;
             println!("ping success.");
         }
-        Cmd::Install { erase_all, bundle, require_key_enable_shape } => {
+        Cmd::Install {
+            erase_all,
+            bundle,
+            require_key_enable_shape,
+        } => {
             // Load bundle
             let bundle_reader = std::fs::File::open(&bundle)
                 .with_context(|| format!("loading {}", bundle.display()))?;
-            let mut zip = ZipArchive::new(bundle_reader)
-                .context("opening bundle file as ZIP")?;
+            let mut zip = ZipArchive::new(bundle_reader).context("opening bundle file as ZIP")?;
 
             let img_bootleby = {
-                let mut entry = zip.by_name("bootleby.bin")
+                let mut entry = zip
+                    .by_name("bootleby.bin")
                     .context("can't find bootleby.bin in bundle")?;
                 let mut data = vec![];
-                entry.read_to_end(&mut data)
+                entry
+                    .read_to_end(&mut data)
                     .context("reading bootleby.bin")?;
                 data
             };
             let img_cmpa = {
-                let mut entry = zip.by_name("cmpa.bin")
+                let mut entry = zip
+                    .by_name("cmpa.bin")
                     .context("can't find cmpa.bin in bundle")?;
                 let mut data = vec![];
-                entry.read_to_end(&mut data)
-                    .context("reading cmpa.bin")?;
+                entry.read_to_end(&mut data).context("reading cmpa.bin")?;
                 data
             };
             let img_cfpa = {
-                let mut entry = zip.by_name("cfpa.bin")
+                let mut entry = zip
+                    .by_name("cfpa.bin")
                     .context("can't find cfpa.bin in bundle")?;
                 let mut data = vec![];
-                entry.read_to_end(&mut data)
-                    .context("reading cfpa.bin")?;
+                entry.read_to_end(&mut data).context("reading cfpa.bin")?;
                 data
             };
 
-            let img_cmpa: &[u8; 512] = img_cmpa[..].try_into()
+            let img_cmpa: &[u8; 512] = img_cmpa[..]
+                .try_into()
                 .map_err(|_| anyhow!("CMPA file is wrong length!"))?;
-            let img_cfpa: &[u8; 512] = img_cfpa[..].try_into()
+            let img_cfpa: &[u8; 512] = img_cfpa[..]
+                .try_into()
                 .map_err(|_| anyhow!("CFPA file is wrong length!"))?;
 
-            let cmpa = CMPAPage::from_bytes(img_cmpa)
-                .context("parsing CMPA")?;
-            let mut cfpa = CFPAPage::from_bytes(img_cfpa)
-                .context("parsing CFPA")?;
+            let cmpa = CMPAPage::from_bytes(img_cmpa).context("parsing CMPA")?;
+            let mut cfpa = CFPAPage::from_bytes(img_cfpa).context("parsing CFPA")?;
 
             // Basic checks to try and detect mixups.
             log_verify_only_on_failure();
-            lpc55_sign::verify::verify_image(
-                &img_bootleby,
-                cmpa,
-                cfpa.clone(),
-            ).context("verifying image")?;
+            lpc55_sign::verify::verify_image(&img_bootleby, cmpa, cfpa.clone())
+                .context("verifying image")?;
 
             if let Some(keymask) = require_key_enable_shape {
-                // The user has requested that we ensure the CFPA has a
-                // particular set of keys enabled, and no others. Let's get to
-                // it. The ROTKH_REVOKE word is a 32-bit field with the
-                // interesting bits in its least significant byte. In each
-                // field, `0b01` represents enabled, `0b00` represents invalid
-                // (which could become enabled later), and `0b10` represents
-                // revoked.
-                //
-                // We require things to either be enabled or invalid, not
-                // revoked, because that's the use case this was written for.
-                let required = {
-                    let mut bits = 0;
-                    for bit in 0..4 {
-                        if keymask & (1 << bit) != 0 {
-                            bits |= 0b01 << (2 * bit);
-                        }
-                    }
-                    bits
-                };
-                if cfpa.rkth_revoke != required {
+                let found = KeyStateTable::from_rotkh_revoke(cfpa.rkth_revoke);
+                if found != keymask {
                     println!("**** FAILED KEY CHECKS ****");
                     println!("You provided a key shape requirement mask,");
                     println!("but the bundle's CFPA doesn't meet it.");
-                    println!("required: {required:02x}");
-                    println!("found:    {:02x}", cfpa.rkth_revoke);
+                    println!("required: {keymask}");
+                    println!("found:    {found}");
+                    println!("Keys are listed 3, 2, 1, 0");
+                    println!("e = enable, r = revoked, i = invalid");
 
                     bail!("cannot proceed, key requirements not met");
                 }
@@ -223,8 +299,7 @@ fn main() -> Result<()> {
 
             println!("checking current CFPA...");
             {
-                let current_cfpa = read_current_cfpa(&mut *port)
-                    .context("reading current CFPA")?;
+                let current_cfpa = read_current_cfpa(&mut *port).context("reading current CFPA")?;
 
                 // RKTH_REVOKE bits may only be changed from 0 to 1.  Check if
                 // new CFPA would attempt to change any from 1 to 0.
@@ -233,8 +308,18 @@ fn main() -> Result<()> {
                     println!("Bundle's CFPA would attempt to change an");
                     println!("RKTH_REVOKE bit from 1 to 0.  Only 0 to 1");
                     println!("transitions are allowed.");
-                    println!("bundle RKTH_REVOKE: {:02x}", cfpa.rkth_revoke);
-                    println!("device RKTH_REVOKE: {:02x}", current_cfpa.rkth_revoke);
+                    println!(
+                        "bundle RKTH_REVOKE: {:#04x} {}",
+                        cfpa.rkth_revoke,
+                        KeyStateTable::from_rotkh_revoke(cfpa.rkth_revoke)
+                    );
+                    println!(
+                        "device RKTH_REVOKE: {:#04x} {}",
+                        current_cfpa.rkth_revoke,
+                        KeyStateTable::from_rotkh_revoke(current_cfpa.rkth_revoke)
+                    );
+                    println!("Keys are listed 3, 2, 1, 0");
+                    println!("e = enable, r = revoked, i = invalid");
 
                     bail!("cannot proceed, CFPA would be rejected by ROM");
                 }
@@ -253,11 +338,9 @@ fn main() -> Result<()> {
                 ("boot area", 0x1_0000)
             };
             println!("Erasing {name}...");
-            do_isp_flash_erase_region(&mut *port, 0, size)
-                .context("erasing requested section")?;
+            do_isp_flash_erase_region(&mut *port, 0, size).context("erasing requested section")?;
             println!("Writing bootleby image...");
-            do_isp_write_memory(&mut *port, 0, &img_bootleby)
-                .context("writing bootleby")?;
+            do_isp_write_memory(&mut *port, 0, &img_bootleby).context("writing bootleby")?;
             println!("written OK");
 
             // Write CFPA - determine correct version for chip.
@@ -298,7 +381,9 @@ fn main() -> Result<()> {
             println!("humility debugmailbox debug");
             println!("humility -a the-image-i-want.zip flash");
         }
-        Cmd::Check => {
+        Cmd::Check {
+            require_key_enable_shape,
+        } => {
             println!("*** Extracting stuff from the chip ***");
             println!("(Failures in this section indicate either a comms problem,");
             println!("or your chip is locked. See if you can raise the chip via");
@@ -314,32 +399,41 @@ fn main() -> Result<()> {
             // Round up to page count.
             let bb_pages = (bb_size + 512 - 1) / 512;
             // Extract Bootleby image.
-            let mut bootleby = do_isp_read_memory(&mut *port, 0, bb_pages * 512)
-                .context("reading bootleby")?;
+            let mut bootleby =
+                do_isp_read_memory(&mut *port, 0, bb_pages * 512).context("reading bootleby")?;
             // Trim off trailing bytes.
             bootleby.truncate(bb_size as usize);
 
             // Extract CMPA.
             println!("reading CMPA");
-            let img_cmpa = do_isp_read_memory(&mut *port, 0x9e400, 512)
-                .context("reading CMPA")?;
+            let img_cmpa = do_isp_read_memory(&mut *port, 0x9e400, 512).context("reading CMPA")?;
             let img_cmpa: &[u8; 512] = img_cmpa[..].try_into().unwrap();
 
-            let cmpa = CMPAPage::from_bytes(img_cmpa)
-                .context("parsing CMPA")?;
+            let cmpa = CMPAPage::from_bytes(img_cmpa).context("parsing CMPA")?;
 
             // Extract CFPA.
             println!("reading CFPA(s)");
-            let cfpa = read_current_cfpa(&mut *port)
-                .context("reading CFPA")?;
+            let cfpa = read_current_cfpa(&mut *port).context("reading CFPA")?;
+
+            if let Some(keymask) = require_key_enable_shape {
+                let found = KeyStateTable::from_rotkh_revoke(cfpa.rkth_revoke);
+                if found != keymask {
+                    println!("**** FAILED KEY CHECKS ****");
+                    println!("You provided a key shape requirement mask,");
+                    println!("but the CFPA doesn't meet it.");
+                    println!("required: {keymask}");
+                    println!("found:    {found}");
+                    println!("Keys are listed 3, 2, 1, 0");
+                    println!("e = enable, r = revoked, i = invalid");
+
+                    bail!("cannot proceed, key requirements not met");
+                }
+            }
 
             println!("*** Checking Bootleby Image - begin verification spam! ***");
             log_verify_verbose();
-            lpc55_sign::verify::verify_image(
-                &bootleby,
-                cmpa,
-                cfpa.clone(),
-            ).context("verifying image")?;
+            lpc55_sign::verify::verify_image(&bootleby, cmpa, cfpa.clone())
+                .context("verifying image")?;
 
             println!("*** Bootleby image is intact and matches CMPA/CFPA ***");
 
@@ -347,16 +441,19 @@ fn main() -> Result<()> {
             println!("Someday this tool will check them for you!");
             println!("Today is not that day.");
         }
-        Cmd::Lock { dry_run, yes_really, leave_debug_open, require_key_enable_shape } => {
+        Cmd::Lock {
+            dry_run,
+            yes_really,
+            leave_debug_open,
+            require_key_enable_shape,
+        } => {
             println!("Reading current CMPA contents...");
-            let img_cmpa = do_isp_read_memory(&mut *port, 0x9_e400, 512)
-                .context("reading CMPA")?;
+            let img_cmpa = do_isp_read_memory(&mut *port, 0x9_e400, 512).context("reading CMPA")?;
             let cmpa: [u8; 512] = img_cmpa.try_into().unwrap();
 
             // For the heck of it -- parse the CMPA and decline to proceed if it
             // won't parse, to try and prevent locking nonsense into the CMPA.
-            let mut cmpa = CMPAPage::from_bytes(&cmpa)
-                .context("parsing CMPA")?;
+            let mut cmpa = CMPAPage::from_bytes(&cmpa).context("parsing CMPA")?;
 
             // Note: PIN=0 + DEFAULT=0 means debug-auth-only
             let cc_socu_target = 0xFFFF_0000;
@@ -366,56 +463,45 @@ fn main() -> Result<()> {
                     cmpa.cc_socu_pin = cc_socu_target;
                 }
                 if cmpa.cc_socu_dflt != cc_socu_target {
-                    println!("Note: CMPA.CC_SOCU_DFLT was permissive, overriding to disable debug.");
+                    println!(
+                        "Note: CMPA.CC_SOCU_DFLT was permissive, overriding to disable debug."
+                    );
                     cmpa.cc_socu_dflt = cc_socu_target;
                 }
             }
 
             println!("Reading current CFPA contents...");
-            let mut cfpa = read_current_cfpa(&mut *port)
-                .context("reading CFPA")?;
+            let mut cfpa = read_current_cfpa(&mut *port).context("reading CFPA")?;
             println!("CFPA version = {}", cfpa.version);
             let mut cfpa_update_required = false;
             if !leave_debug_open {
                 if cfpa.dcfg_cc_socu_ns_pin != cc_socu_target {
-                    println!("Note: CFPA.CC_SOCU_NS_PIN was permissive, overriding to disable debug.");
+                    println!(
+                        "Note: CFPA.CC_SOCU_NS_PIN was permissive, overriding to disable debug."
+                    );
                     cfpa.dcfg_cc_socu_ns_pin = cc_socu_target;
                     cfpa_update_required = true;
                 }
                 if cfpa.dcfg_cc_socu_ns_dflt != cc_socu_target {
-                    println!("Note: CFPA.CC_SOCU_NS_DFLT was permissive, overriding to disable debug.");
+                    println!(
+                        "Note: CFPA.CC_SOCU_NS_DFLT was permissive, overriding to disable debug."
+                    );
                     cfpa.dcfg_cc_socu_ns_dflt = cc_socu_target;
                     cfpa_update_required = true;
                 }
             }
-            if let Some(keymask) = require_key_enable_shape {
-                // The user has requested that we ensure the CFPA has a
-                // particular set of keys enabled, and no others, before
-                // locking. Let's get to it. The ROTKH_REVOKE word is a 32-bit
-                // field with the interesting bits in its least significant
-                // byte. In each field, `0b01` represents enabled, `0b00`
-                // represents invalid (which could become enabled later), and
-                // `0b10` represents revoked.
-                //
-                // We require things to either be enabled or invalid, not
-                // revoked, because that's the use case this was written for.
-                for slot in 0..4 {
-                    let required_state = keymask & (1 << slot) != 0;
+            if let Some(keytable) = require_key_enable_shape {
+                let found_keytable = KeyStateTable::from_rotkh_revoke(cfpa.rkth_revoke);
+                if found_keytable != keytable {
+                    println!("**** FAILED KEY CHECKS ****");
+                    println!("You provided a key shape requirement mask,");
+                    println!("but the CFPA doesn't meet it.");
+                    println!("required: {keytable}");
+                    println!("found:    {found_keytable}");
+                    println!("Keys are listed 3, 2, 1, 0");
+                    println!("e = enable, r = revoked, i = invalid");
 
-                    let found_state = match cfpa.rkth_revoke >> (2 * slot) & 0x3 {
-                        0b01 => true,
-                        _ => false,
-                    };
-
-                    if required_state != found_state {
-                        println!("**** FAILED KEY CHECKS ****");
-                        println!("You provided a key shape requirement mask,");
-                        println!("but the CFPA doesn't meet it.");
-                        println!("required: {keymask:02x}");
-                        println!("found:    {:02x}", cfpa.rkth_revoke);
-
-                        bail!("cannot proceed, key requirements not met");
-                    }
+                    bail!("cannot proceed, key requirements not met");
                 }
             }
 
@@ -425,8 +511,7 @@ fn main() -> Result<()> {
             }
 
             println!("Computing locking hash...");
-            let img_cmpa = cmpa.to_vec()
-                .context("Re-packing CMPA failed")?;
+            let img_cmpa = cmpa.to_vec().context("Re-packing CMPA failed")?;
             let mut image_hash = Sha256::new();
             image_hash.update(&img_cmpa[..512 - 32]);
             let image_hash = image_hash.finalize();
@@ -455,8 +540,10 @@ fn main() -> Result<()> {
             println!("{}", pretty_hex::pretty_hex(&locked_cmpa));
 
             if dry_run {
-                println!("You requested a dry run; no changes have been \
-                    written back.");
+                println!(
+                    "You requested a dry run; no changes have been \
+                    written back."
+                );
 
                 return Ok(());
             }
@@ -494,10 +581,7 @@ fn main() -> Result<()> {
 fn log_verify_only_on_failure() {
     let mut builder = env_logger::Builder::from_default_env();
     builder
-        .filter(
-            Some("lpc55_sign"),
-            log::LevelFilter::Warn,
-        )
+        .filter(Some("lpc55_sign"), log::LevelFilter::Warn)
         .init();
 }
 
@@ -505,15 +589,12 @@ fn log_verify_only_on_failure() {
 fn log_verify_verbose() {
     let mut builder = env_logger::Builder::from_default_env();
     builder
-        .filter(
-            Some("lpc55_sign"),
-            log::LevelFilter::Info,
-        )
+        .filter(Some("lpc55_sign"), log::LevelFilter::Info)
         .init();
 }
 
 /// Read the current CFPA areas and find the active one.
-fn read_current_cfpa(port: &mut dyn SerialPort) -> Result<lpc55_areas::CFPAPage>{
+fn read_current_cfpa(port: &mut dyn SerialPort) -> Result<lpc55_areas::CFPAPage> {
     let ping = do_isp_read_memory(port, 0x9_e000, 512)?;
     let pong = do_isp_read_memory(port, 0x9_e200, 512)?;
 
