@@ -4,6 +4,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
+use hubtools::RawHubrisArchive;
 use lpc55_areas::{CFPAPage, CMPAPage};
 use lpc55_isp::cmd::*;
 use lpc55_isp::isp::do_ping;
@@ -181,6 +182,62 @@ impl KeyStateTable {
     }
 }
 
+// A struct is just a named tuple that prevents us from mixing up
+// CMPA and CFPA
+struct BootlebyFiles {
+    bootleby: Vec<u8>,
+    cmpa: Vec<u8>,
+    cfpa: Vec<u8>,
+}
+
+fn get_files(bundle: PathBuf) -> Result<BootlebyFiles> {
+    if let Ok(archive) = RawHubrisArchive::load(&bundle) {
+        Ok(BootlebyFiles {
+            // bootleby is packaged as the final archive
+            bootleby: archive.extract_file("img/final.bin")?,
+            cmpa: archive.extract_file("cmpa.bin")?,
+            cfpa: archive.extract_file("cfpa.bin")?,
+        })
+    } else {
+        let bundle_reader = std::fs::File::open(&bundle)
+            .with_context(|| format!("loading {}", bundle.display()))?;
+        let mut zip = ZipArchive::new(bundle_reader).context("opening bundle file as ZIP")?;
+
+        let bootleby = {
+            let mut entry = zip
+                .by_name("bootleby.bin")
+                .context("can't find bootleby.bin in bundle")?;
+            let mut data = vec![];
+            entry
+                .read_to_end(&mut data)
+                .context("reading bootleby.bin")?;
+            data
+        };
+        let cmpa = {
+            let mut entry = zip
+                .by_name("cmpa.bin")
+                .context("can't find cmpa.bin in bundle")?;
+            let mut data = vec![];
+            entry.read_to_end(&mut data).context("reading cmpa.bin")?;
+            data
+        };
+        let cfpa = {
+            let mut entry = zip
+                .by_name("cfpa.bin")
+                .context("can't find cfpa.bin in bundle")?;
+            let mut data = vec![];
+            entry.read_to_end(&mut data).context("reading cfpa.bin")?;
+            data
+        };
+
+        Ok(BootlebyFiles {
+            bootleby,
+            cfpa,
+            cmpa,
+        })
+    }
+}
+
 fn main() -> Result<()> {
     let cmd = Embootleby::parse();
 
@@ -226,42 +283,14 @@ fn main() -> Result<()> {
             bundle,
             require_key_enable_shape,
         } => {
-            // Load bundle
-            let bundle_reader = std::fs::File::open(&bundle)
-                .with_context(|| format!("loading {}", bundle.display()))?;
-            let mut zip = ZipArchive::new(bundle_reader).context("opening bundle file as ZIP")?;
+            let files = get_files(bundle)?;
 
-            let img_bootleby = {
-                let mut entry = zip
-                    .by_name("bootleby.bin")
-                    .context("can't find bootleby.bin in bundle")?;
-                let mut data = vec![];
-                entry
-                    .read_to_end(&mut data)
-                    .context("reading bootleby.bin")?;
-                data
-            };
-            let img_cmpa = {
-                let mut entry = zip
-                    .by_name("cmpa.bin")
-                    .context("can't find cmpa.bin in bundle")?;
-                let mut data = vec![];
-                entry.read_to_end(&mut data).context("reading cmpa.bin")?;
-                data
-            };
-            let img_cfpa = {
-                let mut entry = zip
-                    .by_name("cfpa.bin")
-                    .context("can't find cfpa.bin in bundle")?;
-                let mut data = vec![];
-                entry.read_to_end(&mut data).context("reading cfpa.bin")?;
-                data
-            };
+            let img_bootleby = files.bootleby;
 
-            let img_cmpa: &[u8; 512] = img_cmpa[..]
+            let img_cmpa: &[u8; 512] = files.cmpa[..]
                 .try_into()
                 .map_err(|_| anyhow!("CMPA file is wrong length!"))?;
-            let img_cfpa: &[u8; 512] = img_cfpa[..]
+            let img_cfpa: &[u8; 512] = files.cfpa[..]
                 .try_into()
                 .map_err(|_| anyhow!("CFPA file is wrong length!"))?;
 
