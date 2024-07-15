@@ -40,8 +40,9 @@ Sorry about that.
 - A clone of the [`embootleby`] repo (this repo!)
 - A clone of the [Hubris] repo
 - A reasonably recent Humility install (0.10.2 or later)
-- The appropriate bootleby upgrade bundle for your board. We've checked copies
-  into the `embootleby` repo in the `bundles` directory.
+- The appropriate bootleby upgrade bundle for your board. These are available in
+  the [Hubris repo](https://github.com/oxidecomputer/hubris/tree/master/app),
+  e.g. [`app/oxide-rot-1/bootleby-oxide-rot-1.zip`](https://github.com/oxidecomputer/hubris/blob/master/app/oxide-rot-1/bootleby-oxide-rot-1.zip).
 
 ## Procedure
 
