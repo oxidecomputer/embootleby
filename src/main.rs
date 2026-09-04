@@ -7,7 +7,7 @@ use clap::Parser;
 use hubtools::RawHubrisArchive;
 use lpc55_areas::{CFPAPage, CMPAPage};
 use lpc55_isp::cmd::*;
-use lpc55_isp::isp::do_ping;
+use lpc55_isp::isp::Isp;
 use serialport::{DataBits, FlowControl, Parity, SerialPort, StopBits};
 use sha2::{Digest, Sha256};
 use std::io::{ErrorKind, Read};
@@ -275,7 +275,7 @@ fn main() -> Result<()> {
 
     match cmd.cmd {
         Cmd::Ping => {
-            do_ping(&mut *port)?;
+            port.do_ping()?;
             println!("ping success.");
         }
         Cmd::Install {
@@ -323,12 +323,12 @@ fn main() -> Result<()> {
 
             println!("checking serial connection and ISP mode...");
             // Do a ping to check basic connectivity.
-            do_ping(&mut *port)?;
+            port.do_ping()?;
             println!("success.");
 
             println!("checking current CFPA...");
             {
-                let current_cfpa = read_current_cfpa(&mut *port).context("reading current CFPA")?;
+                let current_cfpa = read_current_cfpa(&mut port).context("reading current CFPA")?;
 
                 // RKTH_REVOKE bits may only be changed from 0 to 1.  Check if
                 // new CFPA would attempt to change any from 1 to 0.
@@ -367,37 +367,37 @@ fn main() -> Result<()> {
                 ("boot area", 0x1_0000)
             };
             println!("Erasing {name}...");
-            do_isp_flash_erase_region(&mut *port, 0, size).context("erasing requested section")?;
+            do_isp_flash_erase_region(&mut port, 0, size).context("erasing requested section")?;
             println!("Writing bootleby image...");
-            do_isp_write_memory(&mut *port, 0, &img_bootleby).context("writing bootleby")?;
+            do_isp_write_memory(&mut port, 0, &img_bootleby).context("writing bootleby")?;
             println!("written OK");
 
             // Write CFPA - determine correct version for chip.
             println!("Writing CFPA...");
             {
                 let new_bytes = cfpa.to_vec()?;
-                do_isp_write_memory(&mut *port, 0x9_de00, &new_bytes)?;
+                do_isp_write_memory(&mut port, 0x9_de00, &new_bytes)?;
             }
             println!("done");
 
             // Write CMPA
             println!("Erasing CMPA...");
-            do_isp_write_memory(&mut *port, 0x9e400, &[0; 512])?;
+            do_isp_write_memory(&mut port, 0x9e400, &[0; 512])?;
             println!("Writing new CMPA...");
-            do_isp_write_memory(&mut *port, 0x9e400, img_cmpa)?;
+            do_isp_write_memory(&mut port, 0x9e400, img_cmpa)?;
             println!("done");
 
             // Enroll
             println!("Generating new PUF activation code...");
-            do_enroll(&mut *port)?;
+            do_enroll(&mut port)?;
 
             // Generate-UDS
             println!("Generating new UDS...");
-            do_generate_uds(&mut *port)?;
+            do_generate_uds(&mut port)?;
 
             // Write key store
             println!("Writing results to flash...");
-            do_save_keystore(&mut *port)?;
+            do_save_keystore(&mut port)?;
 
             // reboot
             println!("***********************************");
@@ -421,7 +421,7 @@ fn main() -> Result<()> {
             // Read first 512 bytes of flash to get Bootleby image geometry. We
             // have to do this to avoid reading erased sectors, because reading
             // erased sectors makes ISP mad.
-            let first_sector = do_isp_read_memory(&mut *port, 0, 512)
+            let first_sector = do_isp_read_memory(&mut port, 0, 512)
                 .context("reading first sector (is flash empty?)")?;
             // NXP-style images have the image length at 0x20 as a u32.
             let bb_size = u32::from_le_bytes(first_sector[0x20..0x24].try_into().unwrap());
@@ -429,20 +429,20 @@ fn main() -> Result<()> {
             let bb_pages = (bb_size + 512 - 1) / 512;
             // Extract Bootleby image.
             let mut bootleby =
-                do_isp_read_memory(&mut *port, 0, bb_pages * 512).context("reading bootleby")?;
+                do_isp_read_memory(&mut port, 0, bb_pages * 512).context("reading bootleby")?;
             // Trim off trailing bytes.
             bootleby.truncate(bb_size as usize);
 
             // Extract CMPA.
             println!("reading CMPA");
-            let img_cmpa = do_isp_read_memory(&mut *port, 0x9e400, 512).context("reading CMPA")?;
+            let img_cmpa = do_isp_read_memory(&mut port, 0x9e400, 512).context("reading CMPA")?;
             let img_cmpa: &[u8; 512] = img_cmpa[..].try_into().unwrap();
 
             let cmpa = CMPAPage::from_bytes(img_cmpa).context("parsing CMPA")?;
 
             // Extract CFPA.
             println!("reading CFPA(s)");
-            let cfpa = read_current_cfpa(&mut *port).context("reading CFPA")?;
+            let cfpa = read_current_cfpa(&mut port).context("reading CFPA")?;
 
             if let Some(keymask) = require_key_enable_shape {
                 let found = KeyStateTable::from_rotkh_revoke(cfpa.rkth_revoke);
@@ -477,7 +477,7 @@ fn main() -> Result<()> {
             require_key_enable_shape,
         } => {
             println!("Reading current CMPA contents...");
-            let img_cmpa = do_isp_read_memory(&mut *port, 0x9_e400, 512).context("reading CMPA")?;
+            let img_cmpa = do_isp_read_memory(&mut port, 0x9_e400, 512).context("reading CMPA")?;
             let cmpa: [u8; 512] = img_cmpa.try_into().unwrap();
 
             // For the heck of it -- parse the CMPA and decline to proceed if it
@@ -500,7 +500,7 @@ fn main() -> Result<()> {
             }
 
             println!("Reading current CFPA contents...");
-            let mut cfpa = read_current_cfpa(&mut *port).context("reading CFPA")?;
+            let mut cfpa = read_current_cfpa(&mut port).context("reading CFPA")?;
             println!("CFPA version = {}", cfpa.version);
             let mut cfpa_update_required = false;
             if !leave_debug_open {
@@ -586,14 +586,14 @@ fn main() -> Result<()> {
 
             if cfpa_update_required {
                 println!("Writing CFPA scratch page...");
-                do_isp_write_memory(&mut *port, 0x9_de00, &final_cfpa)?;
+                do_isp_write_memory(&mut port, 0x9_de00, &final_cfpa)?;
                 println!("done!");
             }
 
             println!("Erasing CMPA...");
-            do_isp_write_memory(&mut *port, 0x9_e400, &[0; 512])?;
+            do_isp_write_memory(&mut port, 0x9_e400, &[0; 512])?;
             println!("Writing new CMPA...");
-            do_isp_write_memory(&mut *port, 0x9_e400, &locked_cmpa)?;
+            do_isp_write_memory(&mut port, 0x9_e400, &locked_cmpa)?;
             println!("done!");
         }
     }
@@ -623,7 +623,7 @@ fn log_verify_verbose() {
 }
 
 /// Read the current CFPA areas and find the active one.
-fn read_current_cfpa(port: &mut dyn SerialPort) -> Result<lpc55_areas::CFPAPage> {
+fn read_current_cfpa(port: &mut Box<dyn SerialPort>) -> Result<lpc55_areas::CFPAPage> {
     let ping = do_isp_read_memory(port, 0x9_e000, 512)?;
     let pong = do_isp_read_memory(port, 0x9_e200, 512)?;
 
